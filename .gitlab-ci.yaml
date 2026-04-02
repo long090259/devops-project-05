@@ -1,0 +1,71 @@
+variables:
+  DOCKER_IMAGE_BACKEND: ${DOCKERHUB_USER}/ecommerce-backend:${CI_COMMIT_TAG}_${CI_COMMIT_SHORT_SHA}
+  DOCKER_IMAGE_FRONTEND: ${DOCKERHUB_USER}/ecommerce-frontend:${CI_COMMIT_TAG}_${CI_COMMIT_SHORT_SHA}
+  NAME_SPACE: ecommerce
+  K8S_DEPLOYMENT_BACKEND_NAME: ecommerce-backend-deployment
+  K8S_DEPLOYMENT_FRONTEND_NAME: ecommerce-frontend-deployment
+  K8S_BACKEND_CONTAINER_NAME: ecommerce-backend
+  K8S_FRONTEND_CONTAINER_NAME: ecommerce-frontend
+  # Predefine variables in GitLab: DOCKERHUB_ACCESS_TOKENS, DOCKERHUB_USER, KUBE_CONFIG
+
+stages:
+  - build_push
+  - deploy
+  - verify
+
+# === BUILD & PUSH ===
+build&push:
+  stage: build_push
+  variables:
+    GIT_STRATEGY: clone
+  tags:
+    - devops-test-server
+  only:
+    - tags
+  before_script:
+    - echo $DOCKERHUB_ACCESS_TOKENS | docker login -u $DOCKERHUB_USER --password-stdin
+  script:
+    - docker build -t $DOCKER_IMAGE_BACKEND -f Dockerfile.backend backend
+    - docker push $DOCKER_IMAGE_BACKEND
+    - docker build -t $DOCKER_IMAGE_FRONTEND -f Dockerfile.frontend frontend
+    - docker push $DOCKER_IMAGE_FRONTEND
+  after_script:
+    - docker logout
+    - docker rmi $DOCKER_IMAGE_BACKEND || true
+    - docker rmi $DOCKER_IMAGE_FRONTEND || true
+
+# === DEPLOY TO K8S ===
+deploy:
+  stage: deploy
+  variables:
+    GIT_STRATEGY: none
+  tags:
+    - devops-test-server
+  only:
+    - tags
+  before_script:
+    - mkdir -p ~/.kube
+    - echo "$KUBE_CONFIG" > ~/.kube/config
+  script:
+    - kubectl set image deployment/$K8S_DEPLOYMENT_BACKEND_NAME $K8S_BACKEND_CONTAINER_NAME=$DOCKER_IMAGE_BACKEND -n $NAME_SPACE
+    - kubectl set image deployment/$K8S_DEPLOYMENT_FRONTEND_NAME $K8S_FRONTEND_CONTAINER_NAME=$DOCKER_IMAGE_FRONTEND -n $NAME_SPACE
+  after_script:
+    - rm -f ~/.kube/config
+
+# === VERIFY ===
+verify:
+  stage: verify
+  variables:
+    GIT_STRATEGY: none
+  tags:
+    - devops-test-server
+  only:
+    - tags
+  before_script:
+    - mkdir -p ~/.kube
+    - echo "$KUBE_CONFIG" > ~/.kube/config
+  script:
+    - kubectl rollout status deployment/$K8S_DEPLOYMENT_BACKEND_NAME -n $NAME_SPACE
+    - kubectl rollout status deployment/$K8S_DEPLOYMENT_FRONTEND_NAME -n $NAME_SPACE
+  after_script:
+    - rm -f ~/.kube/config
